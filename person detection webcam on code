@@ -1,0 +1,107 @@
+import cv2
+import numpy as np
+import PIL.Image
+import time
+from ultralytics import YOLO
+from IPython.display import display, Javascript, clear_output
+from google.colab.output import eval_js
+from base64 import b64decode
+
+# 1. Load Model
+model = YOLO('yolov8n.pt')
+
+# 2. JavaScript with Capture & Stop Buttons
+def setup_camera_html():
+    js = Javascript('''
+        async function runCamera() {
+            const div = document.createElement('div');
+            div.style.marginBottom = '10px';
+            
+            const btnStop = document.createElement('button');
+            btnStop.textContent = 'STOP CAMERA';
+            btnStop.style.padding = '10px';
+            btnStop.style.background = 'red';
+            btnStop.style.color = 'white';
+            btnStop.style.border = 'none';
+            btnStop.style.cursor = 'pointer';
+
+            const video = document.createElement('video');
+            video.width = 640;
+            video.height = 480;
+            video.autoplay = true;
+            video.playsInline = true;
+
+            const stream = await navigator.mediaDevices.getUserMedia({video: true});
+            video.srcObject = stream;
+
+            document.body.appendChild(div);
+            div.appendChild(btnStop);
+            div.appendChild(video);
+
+            const canvas = document.createElement('canvas');
+            canvas.width = 640;
+            canvas.height = 480;
+
+            window.streaming = true;
+            
+            // Stop button logic
+            btnStop.onclick = () => {
+                window.streaming = false;
+                stream.getTracks().forEach(track => track.stop());
+                div.remove();
+            };
+
+            // Global capture function
+            window.captureFrame = function() {
+                if(!window.streaming) return null;
+                canvas.getContext('2d').drawImage(video, 0, 0);
+                return canvas.toDataURL('image/jpeg', 0.8);
+            };
+        }
+        runCamera();
+    ''')
+    display(js)
+
+# 3. Main Detection Loop
+def start_object_detection():
+    setup_camera_html()
+    print("Initializing camera... please wait 2 seconds.")
+    time.sleep(2)  # CRITICAL: Wait for JS to define captureFrame
+    
+    try:
+        while True:
+            # Grab frame
+            img_data = eval_js('captureFrame()')
+            
+            if img_data is None:
+                print("Camera closed.")
+                break
+
+            # Decode
+            binary = b64decode(img_data.split(',')[1])
+            img_np = np.frombuffer(binary, dtype=np.uint8)
+            frame = cv2.imdecode(img_np, flags=1)
+
+            # Detect
+            results = model.predict(frame, conf=0.3, verbose=False)
+
+            # Plot boxes
+            for r in results:
+                annotated_frame = r.plot()
+                img_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+                img_pil = PIL.Image.fromarray(img_rgb)
+
+                clear_output(wait=True)
+                display(img_pil)
+                
+                if len(r.boxes) > 0:
+                    names = [model.names[int(c)] for c in r.boxes.cls]
+                    print(f"I see: {', '.join(names)}")
+                else:
+                    print("Scanning... show me an object!")
+
+    except Exception as e:
+        print(f"Stopping: {e}")
+
+# Run
+start_object_detection()
